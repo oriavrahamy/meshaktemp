@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <!-- הגדרה קריטית למובייל - מונעת התקרבות (Zoom) מיותרת -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>משחק תלת-מימד למובייל</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* מונע גלילה של המסך */
+            background-color: #87CEEB; /* צבע שמיים */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* מונע פעולות מגע ברירת מחדל של הדפדפן כמו ריענון במשיכה */
+        }
+
+        #game-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* ממשק משתמש (UI) */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* מאפשר ללחיצות לעבור דרך שכבת ה-UI למה שמתחתיה, אלא אם הוגדר אחרת */
+        }
+
+        #top-bar {
+            position: absolute;
+            top: 10px;
+            right: 20px; /* בצד ימין בגלל שזה RTL */
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px black;
+        }
+
+        /* ג'ויסטיק תנועה */
+        #joystick-zone {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            width: 120px;
+            height: 120px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            pointer-events: auto; /* כאן אנחנו כן רוצים לקלוט מגע */
+        }
+
+        #joystick-knob {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        /* כפתור קפיצה */
+        #jump-btn {
+            position: absolute;
+            bottom: 40px;
+            right: 40px;
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 100, 100, 0.7);
+            border: 3px solid rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            pointer-events: auto;
+            user-select: none;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #jump-btn:active {
+            background: rgba(255, 50, 50, 0.9);
+            transform: scale(0.95);
+        }
+
+        /* כפתור סקינים ותצוגת שלב */
+        #skin-btn {
+            position: absolute;
+            top: 70px;
+            right: 20px;
+            background: rgba(100, 100, 255, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            pointer-events: auto;
+            z-index: 10;
+        }
+        #level-display {
+            position: absolute;
+            top: 10px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        /* אזור שליטת מצלמה - במרכז המסך */
+        #camera-zone {
+            position: absolute;
+            top: 0;
+            left: 150px; /* מרווח מהג'ויסטיק */
+            right: 150px; /* מרווח מכפתור הקפיצה */
+            height: 100%;
+            pointer-events: auto;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 30px;
+            color: white;
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border-radius: 10px;
+        }
+    </style>
+    <!-- ייבוא ספריית Three.js מהרשת -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="game-container"></div>
+    <div id="loading">טוען משחק...</div>
+
+    <div id="ui-layer">
+        <div id="top-bar">מטבעות: <span id="score">0</span></div>
+        <div id="level-display">שלב: <span id="level-num">1</span></div>
+        <div id="skin-btn">החלף סקין</div>
+
+        <!-- אזורים אינטראקטיביים למסך מגע / עכבר -->
+        <div id="camera-zone"></div>
+
+        <div id="joystick-zone">
+            <div id="joystick-knob"></div>
+        </div>
+
+        <div id="jump-btn">קפיצה</div>
+    </div>
+
+    <script>
+        // המתן עד שהדף נטען במלואו
+        window.onload = function () {
+            document.getElementById('loading').style.display = 'none';
+            initGame();
+        };
+
+        function initGame() {
+            // הגדרות בסיסיות של Three.js
+            const scene = new THREE.Scene();
+            // הוספת ערפל (Fog) ליצירת אווירה
+            scene.fog = new THREE.Fog(0x87CEEB, 20, 60);
+
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true; // הפעלת צללים
+            renderer.setClearColor(0x87CEEB); // צבע רקע (שמיים)
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            // תאורה
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // אור כללי רך
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8); // אור שמש יוצר צללים
+            dirLight.position.set(20, 40, -20);
+            dirLight.castShadow = true;
+            dirLight.shadow.camera.left = -30;
+            dirLight.shadow.camera.right = 30;
+            dirLight.shadow.camera.top = 30;
+            dirLight.shadow.camera.bottom = -30;
+            scene.add(dirLight);
+
+            // יצירת חומרים (Materials)
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x4CAF50 }); // דשא
+            const lavaMat = new THREE.MeshStandardMaterial({ color: 0xff3300 }); // לבה (אזור פסילה)
+            const coinMat = new THREE.MeshStandardMaterial({ color: 0xFFD700, metalness: 0.8, roughness: 0.2 });
+
+            // נתוני השלבים (Levels)
+            const levelsData = [
+                {
+                    spawn: new THREE.Vector3(0, 2, 0),
+                    platforms: [
+                        [0, 0, 0, 10, 10, false], [0, -10, -20, 200, 200, true], // התחלה ולבה
+                        [0, 1, -8, 4, 4, false], [5, 2, -14, 4, 4, false],
+                        [0, 3, -20, 3, 3, false], [-6, 4, -22, 4, 4, false], [-12, 5, -20, 5, 5, false]
+                    ],
+                    coins: [[0, 2.5, -8], [5, 3.5, -14], [0, 4.5, -20], [-6, 5.5, -22], [-12, 6.5, -20]]
+                },
+                {
+                    spawn: new THREE.Vector3(0, 2, 0),
+                    platforms: [
+                        [0, 0, 0, 6, 6, false], [0, -10, -20, 200, 200, true],
+                        [0, 2, -10, 3, 3, false], [-8, 4, -10, 3, 3, false],
+                        [-8, 6, -20, 3, 3, false], [0, 8, -20, 3, 3, false], [8, 10, -20, 6, 6, false]
+                    ],
+                    coins: [[0, 3.5, -10], [-8, 5.5, -10], [-8, 7.5, -20], [0, 9.5, -20], [8, 11.5, -20]]
+                },
+                {
+                    spawn: new THREE.Vector3(0, 2, 0),
+                    platforms: [
+                        [0, 0, 0, 5, 5, false], [0, -5, -30, 200, 200, true],
+                        [0, 1, -8, 2, 2, false], [0, 2, -16, 2, 2, false],
+                        [4, 3, -24, 2, 2, false], [-4, 4, -32, 2, 2, false], [0, 5, -40, 8, 8, false]
+                    ],
+                    coins: [[0, 2.5, -8], [0, 3.5, -16], [4, 4.5, -24], [-4, 5.5, -32], [0, 6.5, -40]]
+                }
+            ];
+            let currentLevelIndex = 0;
+
+            // נתוני סקינים
+            const skins = [
+                { name: "סטיב", head: 0xffcc99, body: 0x00aaff, legs: 0x4444aa, arms: 0xffcc99 },
+                { name: "זומבי", head: 0x00aa00, body: 0x00aaff, legs: 0x4444aa, arms: 0x00aa00 },
+                { name: "אנדרמן", head: 0x111111, body: 0x111111, legs: 0x111111, arms: 0x111111 }
+            ];
+            let currentSkinIndex = 0;
+
+            // משתנים למשחקיות
+            let score = 0;
+            let platforms = []; // מערך לשמירת רצפות שניתן לעמוד עליהן
+            let coins = []; // מערך המטבעות
+            let spawnPoint = new THREE.Vector3(0, 2, 0);
+
+            // 1. יצירת השחקן (קופסת פיזיקה בלתי נראית + מודל מיינקראפט)
+            const playerGeo = new THREE.BoxGeometry(1, 2, 1);
+            const playerMat = new THREE.MeshStandardMaterial({ visible: false }); // קופסת התנגשות שקופה
+            const player = new THREE.Mesh(playerGeo, playerMat);
+            player.position.copy(spawnPoint);
+            scene.add(player);
+
+            // בניית מודל הדמות בסגנון מיינקראפט
+            const playerModel = new THREE.Group();
+            playerModel.position.y = -1; // הזזה למטה כדי שהרגליים ייגעו ברצפה של קופסת הפיזיקה
+            player.add(playerModel);
+
+            const matHead = new THREE.MeshStandardMaterial({ color: skins[0].head });
+            const matBody = new THREE.MeshStandardMaterial({ color: skins[0].body });
+            const matArms = new THREE.MeshStandardMaterial({ color: skins[0].arms });
+            const matLegs = new THREE.MeshStandardMaterial({ color: skins[0].legs });
+
+            // ראש
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), matHead);
+            head.position.set(0, 1.75, 0);
+            head.castShadow = true;
+            playerModel.add(head);
+
+            // גוף
+            const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.75, 0.25), matBody);
+            body.position.set(0, 1.125, 0);
+            body.castShadow = true;
+            playerModel.add(body);
+
+            // רגליים (נקודת ציר עליונה לאנימציה)
+            const legGeo = new THREE.BoxGeometry(0.25, 0.75, 0.25);
+            legGeo.translate(0, -0.375, 0); // הזזת נקודת הציר לראש הרגל
+            const leftLeg = new THREE.Mesh(legGeo, matLegs);
+            leftLeg.position.set(0.125, 0.75, 0);
+            leftLeg.castShadow = true;
+            playerModel.add(leftLeg);
+
+            const rightLeg = new THREE.Mesh(legGeo, matLegs);
+            rightLeg.position.set(-0.125, 0.75, 0);
+            rightLeg.castShadow = true;
+            playerModel.add(rightLeg);
+
+            // ידיים
+            const armGeo = new THREE.BoxGeometry(0.25, 0.75, 0.25);
+            armGeo.translate(0, -0.375, 0); // הזזת נקודת הציר לכתף
+            const leftArm = new THREE.Mesh(armGeo, matArms);
+            leftArm.position.set(0.375, 1.5, 0);
+            leftArm.castShadow = true;
+            playerModel.add(leftArm);
+
+            const rightArm = new THREE.Mesh(armGeo, matArms);
+            rightArm.position.set(-0.375, 1.5, 0);
+            rightArm.castShadow = true;
+            playerModel.add(rightArm);
+
+            // כפתור החלפת סקינים
+            document.getElementById('skin-btn').addEventListener('click', () => {
+                currentSkinIndex = (currentSkinIndex + 1) % skins.length;
+                const s = skins[currentSkinIndex];
+                matHead.color.setHex(s.head);
+                matBody.color.setHex(s.body);
+                matArms.color.setHex(s.arms);
+                matLegs.color.setHex(s.legs);
+            });
+
+            // 2. יצירת ציר למצלמה (כדי שתוכל להסתובב סביב השחקן)
+            const cameraPivot = new THREE.Group();
+            scene.add(cameraPivot);
+            cameraPivot.add(camera);
+            camera.position.set(0, 4, 8); // מיקום המצלמה יחסית לציר
+            camera.lookAt(0, 1, 0); // מסתכלת מעט מעל מרכז השחקן
+
+            // 3. עיצוב השלב (Level Design)
+
+            // פונקציית עזר ליצירת משטחים
+            function createPlatform(x, y, z, width, depth, isLava = false) {
+                const geo = new THREE.BoxGeometry(width, 1, depth);
+                const mat = isLava ? lavaMat : groundMat;
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.set(x, y - 0.5, z); // ממקמים כך שהחלק העליון יהיה בגובה y
+                mesh.receiveShadow = true;
+                scene.add(mesh);
+
+                // הוספת מידע לקוליז'ן (התנגשויות)
+                mesh.userData = { isLava: isLava, topY: y, minX: x - width/2, maxX: x + width/2, minZ: z - depth/2, maxZ: z + depth/2 };
+                platforms.push(mesh);
+            }
+
+            // פונקציית עזר ליצירת מטבעות לאיסוף
+            function createCoin(x, y, z) {
+                const geo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+                const mesh = new THREE.Mesh(geo, coinMat);
+                mesh.position.set(x, y, z);
+                mesh.castShadow = true;
+                scene.add(mesh);
+                coins.push(mesh);
+            }
+
+            // משתני פיזיקה ותנועה (הועברו לכאן כדי שיהיו זמינים לפונקציה loadLevel)
+            const playerVelocity = new THREE.Vector3(0, 0, 0);
+            const gravity = -20;
+            const jumpForce = 10;
+            const moveSpeed = 8;
+            let isGrounded = false;
+
+            // פונקציה לטעינת שלב
+            function loadLevel(index) {
+                // מחיקת שלב קודם אם קיים
+                platforms.forEach(p => scene.remove(p));
+                coins.forEach(c => scene.remove(c));
+                platforms = [];
+                coins = [];
+
+                const level = levelsData[index];
+                spawnPoint.copy(level.spawn);
+                player.position.copy(spawnPoint);
+                playerVelocity.y = 0;
+                score = 0;
+                document.getElementById('score').innerText = score;
+                document.getElementById('level-num').innerText = index + 1;
+
+                // בניית המשטחים
+                level.platforms.forEach(p => createPlatform(p[0], p[1], p[2], p[3], p[4], p[5]));
+
+                // בניית המטבעות
+                level.coins.forEach(c => createCoin(c[0], c[1], c[2]));
+            }
+
+            // טעינת השלב הראשון בתחילת המשחק
+            loadLevel(0);
+
+            // משתני קלט (Input)
+            const input = { x: 0, y: 0 }; // מהג'ויסטיק
+            let cameraAngleX = 0; // סיבוב מצלמה שמאלה/ימינה
+
+            // --- טיפול במסך מגע ועכבר (Mobile & PC Controls) ---
+
+            // ג'ויסטיק וירטואלי
+            const joystickZone = document.getElementById('joystick-zone');
+            const joystickKnob = document.getElementById('joystick-knob');
+            let joystickCenter = { x: 0, y: 0 };
+            let joystickActive = false;
+
+            // פונקציות עזר משותפות למגע ולעכבר
+            function startJoystick(clientX, clientY) {
+                const rect = joystickZone.getBoundingClientRect();
+                joystickCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                joystickActive = true;
+                handleJoystickMove({ clientX, clientY });
+            }
+
+            function stopJoystick() {
+                joystickActive = false;
+                joystickKnob.style.transform = `translate(-50%, -50%)`;
+                input.x = 0;
+                input.y = 0;
+            }
+
+            // אירועי מגע (Mobile)
+            joystickZone.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                startJoystick(e.touches[0].clientX, e.touches[0].clientY);
+            }, { passive: false });
+
+            joystickZone.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                if (joystickActive) handleJoystickMove(e.touches[0]);
+            }, { passive: false });
+
+            joystickZone.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                stopJoystick();
+            }, { passive: false });
+
+            // אירועי עכבר (PC)
+            joystickZone.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                startJoystick(e.clientX, e.clientY);
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (joystickActive) {
+                    e.preventDefault();
+                    handleJoystickMove(e);
+                }
+            }, { passive: false });
+
+            document.addEventListener('mouseup', (e) => {
+                if (joystickActive) {
+                    e.preventDefault();
+                    stopJoystick();
+                }
+            });
+
+            function handleJoystickMove(pointer) {
+                const maxRadius = 40; // רדיוס מירבי למשיכת הג'ויסטיק
+                let dx = pointer.clientX - joystickCenter.x;
+                let dy = pointer.clientY - joystickCenter.y;
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                // הגבלת המרחק המקסימלי
+                if (distance > maxRadius) {
+                    dx = (dx / distance) * maxRadius;
+                    dy = (dy / distance) * maxRadius;
+                }
+
+                // הזזת הגרפיקה של הג'ויסטיק
+                joystickKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+                // נרמול הערכים בין -1 ל 1
+                input.x = dx / maxRadius;
+                input.y = dy / maxRadius;
+            }
+
+            // כפתור קפיצה
+            const jumpBtn = document.getElementById('jump-btn');
+            function doJump() {
+                if (isGrounded) {
+                    playerVelocity.y = jumpForce;
+                    isGrounded = false;
+                }
+            }
+            jumpBtn.addEventListener('touchstart', (e) => { e.preventDefault(); doJump(); }, { passive: false });
+            jumpBtn.addEventListener('mousedown', (e) => { e.preventDefault(); doJump(); }); // גם לעכבר
+
+            // סיבוב מצלמה
+            const cameraZone = document.getElementById('camera-zone');
+            let lastTouchX = 0;
+            cameraZone.addEventListener('touchstart', (e) => {
+                lastTouchX = e.touches[0].clientX;
+            }, { passive: false });
+
+            cameraZone.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                const currentX = e.touches[0].clientX;
+                const deltaX = currentX - lastTouchX;
+                cameraAngleX -= deltaX * 0.005; // רגישות הסיבוב
+                lastTouchX = currentX;
+            }, { passive: false });
+
+            // תמיכה במקלדת ועכבר (לפיתוח ובדיקה על מחשב)
+            let isDraggingMouse = false;
+            let lastMouseX = 0;
+            document.addEventListener('mousedown', (e) => {
+                if (e.target.id === 'camera-zone') { isDraggingMouse = true; lastMouseX = e.clientX; }
+            });
+            document.addEventListener('mouseup', () => isDraggingMouse = false);
+            document.addEventListener('mousemove', (e) => {
+                if (isDraggingMouse) {
+                    const deltaX = e.clientX - lastMouseX;
+                    cameraAngleX -= deltaX * 0.005;
+                    lastMouseX = e.clientX;
+                }
+            });
+
+            const keys = {};
+            document.addEventListener('keydown', (e) => keys[e.code] = true);
+            document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+            // התאמה לשינוי גודל מסך
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            const clock = new THREE.Clock();
+
+            // לולאת המשחק (Game Loop) המרכזית
+            function gameLoop() {
+                requestAnimationFrame(gameLoop);
+                const delta = clock.getDelta();
+
+                // 1. קלט ממקלדת (אם אין מגע)
+                if (!joystickActive) {
+                    input.x = 0; input.y = 0;
+                    if (keys['ArrowUp'] || keys['KeyW']) input.y = -1;
+                    if (keys['ArrowDown'] || keys['KeyS']) input.y = 1;
+                    if (keys['ArrowLeft'] || keys['KeyA']) input.x = -1;
+                    if (keys['ArrowRight'] || keys['KeyD']) input.x = 1;
+                    if (keys['Space']) doJump();
+                }
+
+                // 2. חישוב כיוון תנועה ביחס למצלמה
+                const moveVector = new THREE.Vector3(input.x, 0, input.y);
+                // מסובבים את וקטור התנועה כך שיתאים לזווית של המצלמה (כמו במשחקי גוף שלישי אמיתיים)
+                moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraAngleX);
+
+                if (moveVector.length() > 0) moveVector.normalize();
+
+                // עדכון מיקום ב-X ו-Z
+                player.position.x += moveVector.x * moveSpeed * delta;
+                player.position.z += moveVector.z * moveSpeed * delta;
+
+                // סיבוב השחקן לכיוון התנועה
+                if (moveVector.length() > 0.1) {
+                    const targetAngle = Math.atan2(moveVector.x, moveVector.z);
+                    player.rotation.y = targetAngle;
+
+                    // אנימציית הליכה לדמות מיינקראפט
+                    const walkSpeed = 15;
+                    const time = clock.getElapsedTime();
+                    leftArm.rotation.x = Math.sin(time * walkSpeed) * 0.5;
+                    rightArm.rotation.x = -Math.sin(time * walkSpeed) * 0.5;
+                    leftLeg.rotation.x = -Math.sin(time * walkSpeed) * 0.5;
+                    rightLeg.rotation.x = Math.sin(time * walkSpeed) * 0.5;
+                } else {
+                    // איפוס האנימציה כשעומדים במקום
+                    leftArm.rotation.x = 0;
+                    rightArm.rotation.x = 0;
+                    leftLeg.rotation.x = 0;
+                    rightLeg.rotation.x = 0;
+                }
+
+                // 3. פיזיקה - כוח משיכה והתנגשות (Collision)
+                playerVelocity.y += gravity * delta;
+                let nextY = player.position.y + (playerVelocity.y * delta);
+
+                // בדיקת התנגשות (Collision Detection) פשוטה מאוד עם פלטפורמות
+                isGrounded = false;
+                const playerBottomY = nextY - 1; // החצי התחתון של הקפסולה
+
+                for (let plat of platforms) {
+                    const data = plat.userData;
+                    // האם השחקן נמצא מעל המשטח בציר ה-X וה-Z?
+                    if (player.position.x > data.minX && player.position.x < data.maxX &&
+                        player.position.z > data.minZ && player.position.z < data.maxZ) {
+
+                        // האם השחקן נופל ועומד לחצות את משטח ה-Y של הפלטפורמה?
+                        if (playerVelocity.y <= 0 && player.position.y - 1 >= data.topY && playerBottomY <= data.topY) {
+
+                            // אם זו לבה - נפסלים!
+                            if (data.isLava) {
+                                alert("אופס! נפלת ללבה. מתחילים מחדש.");
+                                player.position.copy(spawnPoint);
+                                playerVelocity.y = 0;
+                                return; // עצירת הפריים הנוכחי
+                            }
+
+                            nextY = data.topY + 1; // הצבת השחקן בדיוק על הפלטפורמה
+                            playerVelocity.y = 0;
+                            isGrounded = true;
+                            break; // מצאנו רצפה, אין צורך לבדוק שאר משטחים
+                        }
+                    }
+                }
+
+                player.position.y = nextY;
+
+                // 4. בדיקת איסוף מטבעות
+                for (let i = coins.length - 1; i >= 0; i--) {
+                    let coin = coins[i];
+                    coin.rotation.x += 2 * delta;
+                    coin.rotation.y += 3 * delta; // סיבוב אנימציה למטבע
+
+                    // בדיקת מרחק בין השחקן למטבע
+                    if (player.position.distanceTo(coin.position) < 1.5) {
+                        scene.remove(coin);
+                        coins.splice(i, 1);
+                        score++;
+                        document.getElementById('score').innerText = score;
+
+                        // בדיקה אם סיימנו לאסוף הכל בשלב
+                        if (coins.length === 0) {
+                            setTimeout(() => {
+                                currentLevelIndex++;
+                                if (currentLevelIndex < levelsData.length) {
+                                    loadLevel(currentLevelIndex);
+                                } else {
+                                    alert("כל הכבוד! סיימת את כל השלבים במשחק!");
+                                    currentLevelIndex = 0;
+                                    loadLevel(0); // התחלה מחדש
+                                }
+                            }, 300); // השהייה קלה כדי לראות את איסוף המטבע האחרון
+                        }
+                    }
+                }
+
+                // 5. עדכון מיקום מצלמה
+                // מיקום הציר עובר למיקום השחקן (אפשר להוסיף LERP להחלקה, אבל זה יעיל כרגע)
+                cameraPivot.position.copy(player.position);
+                cameraPivot.rotation.y = cameraAngleX; // סיבוב הציר לפי החלקת האצבע
+
+                // 6. רינדור
+                renderer.render(scene, camera);
+            }
+
+            // התחלת הלולאה
+            gameLoop();
+        }
+    </script>
+</body>
+</html>
